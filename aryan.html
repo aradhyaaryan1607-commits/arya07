@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Control Panel</title>
+<style>
+:root{--bg:#eef2f0;--panel:#ffffff;--ink:#17261f;--mute:#5d6e65;--line:#cfd9d3;--ok:#1f8a5b;--bad:#c2392f;--accent:#0f5c47}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1a15;--panel:#16251e;--ink:#e6f0ea;--mute:#8da398;--line:#2a3d34;--ok:#3fcf8e;--bad:#ff6b5e;--accent:#3fcf8e}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 "Segoe UI",system-ui,sans-serif;padding:24px 16px}
+main{max-width:520px;margin:0 auto;display:grid;gap:16px}
+h1{font-size:1.6rem;margin:0 0 4px}
+p{margin:0;color:var(--mute)}
+section{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px}
+h2{font-size:1rem;margin:0 0 12px}
+.row{display:flex;gap:8px}
+input{flex:1;padding:10px;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--ink);font:inherit}
+button{padding:10px 16px;border:0;border-radius:6px;background:var(--accent);color:var(--bg);font:inherit;font-weight:600;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+button.alt{background:transparent;color:var(--ink);border:1px solid var(--line)}
+#status{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:.95rem}
+#dot{width:10px;height:10px;border-radius:50%;background:var(--mute)}
+#dot.ok{background:var(--ok)}#dot.bad{background:var(--bad)}
+.big{font-size:2.6rem;font-weight:700;line-height:1.1}
+.big small{font-size:1rem;color:var(--mute);font-weight:400}
+.hint{font-size:.85rem;margin-top:10px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>ESP32 Control Panel</h1>
+    <p>Hosted on GitHub Pages. Talks to your ESP32 over Wi-Fi.</p>
+  </header>
+
+  <section>
+    <h2>Connect</h2>
+    <div class="row">
+      <input id="ip" placeholder="ESP32 address, e.g. 192.168.1.50" aria-label="ESP32 address" autocomplete="off">
+      <button id="connect">Connect</button>
+    </div>
+    <div id="status"><span id="dot"></span><span id="msg">Not connected</span></div>
+    <p class="hint">Phone/laptop must be on the same Wi-Fi as the ESP32.</p>
+  </section>
+
+  <section>
+    <h2>LED</h2>
+    <div class="row">
+      <button id="on">Turn on</button>
+      <button id="off" class="alt">Turn off</button>
+    </div>
+    <p id="ledState" class="hint">State unknown</p>
+  </section>
+
+  <section>
+    <h2>Sensor reading</h2>
+    <div class="big"><span id="val">--</span> <small id="unit">raw ADC</small></div>
+    <p class="hint">Updates every 2 seconds while connected.</p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let base = "", timer = null;
+try { $("ip").value = localStorage.getItem("esp32ip") || ""; } catch (e) {}
+
+function setStatus(ok, text){
+  $("dot").className = ok ? "ok" : "bad";
+  $("msg").textContent = text;
+}
+
+async function call(path){
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const r = await fetch(base + path, { signal: ctl.signal });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    return await r.json();
+  } finally { clearTimeout(t); }
+}
+
+async function poll(){
+  try {
+    const d = await call("/api/status");
+    $("val").textContent = d.sensor;
+    $("ledState").textContent = "LED is " + (d.led ? "on" : "off");
+    setStatus(true, "Connected to " + base.replace("http://",""));
+  } catch (e) {
+    setStatus(false, "Connection lost. Check power, Wi-Fi and address.");
+  }
+}
+
+$("connect").onclick = async () => {
+  let ip = $("ip").value.trim().replace(/^https?:\/\//,"").replace(/\/$/,"");
+  if (!ip) return setStatus(false, "Enter the ESP32 address first.");
+  base = "http://" + ip;
+  try { localStorage.setItem("esp32ip", ip); } catch (e) {}
+  clearInterval(timer);
+  setStatus(false, "Connecting...");
+  if (location.protocol === "https:") {
+    $("msg").textContent = "Connecting... (if this fails, see the browser note in README)";
+  }
+  await poll();
+  timer = setInterval(poll, 2000);
+};
+
+async function led(state){
+  if (!base) return setStatus(false, "Connect first.");
+  try { await call("/api/led?state=" + state); poll(); }
+  catch (e) { setStatus(false, "Command failed. Check the connection."); }
+}
+$("on").onclick = () => led(1);
+$("off").onclick = () => led(0);
+</script>
+</body>
+</html>
